@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Programmation pluriannuelle — Widget Grist</title>
+
+<!--
+  WIDGET TABLEAU DE BORD PLURIANNUEL POUR GRIST
+  =======================================================================
+  Fichier unique, autonome. Seule dépendance : l'API officielle Grist.
+  Accès en lecture seule ("read table") sur la table Projets uniquement.
+  Aucune bibliothèque de graphiques externe : tout est en SVG/CSS natif,
+  pour rester simple à auditer.
+
+  Colonnes attendues (table Projets) :
+    - Nom            (Texte)
+    - Annee          (Numérique)   : année de réalisation prévue (2026, 2027...)
+    - Vote           (Case à cocher / Bool)
+    - StatutGlobal   (Choix)       : Envisagé / À réaliser / En cours / Livré / Suspendu
+    - BudgetGlobal   (Numérique)
+    - DepenseReelle  (Formule, Numeric, optionnel) : somme des CoutReel des
+                       tâches liées — formule à créer côté Grist :
+                       sum([t.CoutReel for t in Taches.lookupRecords(Projet=$id)])
+-->
+
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+
+<style>
+  :root {
+    --bleu-france:   #000091;
+    --bleu-clair:     #6a6af4;
+    --gris-fond:      #f6f6f6;
+    --gris-bordure:   #e3e3fd;
+    --gris-texte:     #3a3a3a;
+    --blanc:          #ffffff;
+    --vert-succes:    #18753c;
+    --orange-attente: #b34000;
+    --rouge-retard:   #e1000f;
+    --gris-neutre:    #9a9a9a;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    color: var(--gris-texte);
+    background: var(--blanc);
+    font-size: 14px;
+  }
+
+  #app { display: flex; flex-direction: column; height: 100vh; overflow-y: auto; }
+
+  #toolbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 2px solid var(--bleu-france);
+    flex-shrink: 0;
+  }
+  #toolbar .titre { font-weight: 700; color: var(--bleu-france); font-size: 15px; }
+
+  .toggle-vote {
+    display: flex; border: 1px solid var(--bleu-france); border-radius: 12px; overflow: hidden;
+  }
+  .toggle-vote button {
+    border: none; background: var(--blanc); color: var(--bleu-france);
+    padding: 4px 12px; font-size: 12px; cursor: pointer;
+  }
+  .toggle-vote button.actif { background: var(--bleu-france); color: var(--blanc); }
+
+  #bandeau-stats { display: flex; gap: 10px; padding: 12px 14px; flex-shrink: 0; }
+  .stat-globale { background: var(--gris-fond); border-radius: 3px; padding: 10px 14px; text-align: center; flex: 1; }
+  .stat-globale .valeur { font-size: 19px; font-weight: 700; color: var(--bleu-france); }
+  .stat-globale .libelle { font-size: 11px; color: #5a5a5a; margin-top: 2px; }
+
+  .section {
+    padding: 6px 14px 20px 14px;
+  }
+  .section h3 {
+    font-size: 12px; text-transform: uppercase; color: var(--bleu-france);
+    margin: 10px 0 12px 0; padding-bottom: 4px; border-bottom: 1px solid var(--gris-bordure);
+  }
+
+  .legende { display: flex; gap: 16px; font-size: 12px; color: #5a5a5a; margin-bottom: 10px; }
+  .legende span { display: flex; align-items: center; gap: 5px; }
+  .puce { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+  /* --- Histogramme par année --- */
+  #histogramme {
+    display: flex;
+    align-items: flex-end;
+    gap: 22px;
+    height: 200px;
+    padding: 0 6px;
+    border-bottom: 1px solid var(--gris-bordure);
+  }
+  .groupe-annee { display: flex; flex-direction: column; align-items: center; flex: 1; height: 100%; justify-content: flex-end; }
+  .barres-annee { display: flex; gap: 4px; align-items: flex-end; height: 100%; }
+  .barre {
+    width: 22px;
+    border-radius: 3px 3px 0 0;
+    position: relative;
+  }
+  .barre.prevu { background: var(--bleu-clair); }
+  .barre.reel { background: var(--bleu-france); }
+  .barre .valeur-barre {
+    position: absolute; top: -18px; left: 50%; transform: translateX(-50%);
+    font-size: 10px; color: var(--gris-texte); white-space: nowrap;
+  }
+  .libelle-annee { margin-top: 8px; font-size: 12px; font-weight: 700; color: var(--gris-texte); }
+  .nb-projets-annee { font-size: 10px; color: #8a8a8a; }
+
+  /* --- Courbe cumulée --- */
+  #zone-courbe { width: 100%; height: 200px; }
+
+  /* --- Répartition par statut --- */
+  .ligne-statut { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .ligne-statut .libelle-statut { width: 90px; font-size: 12px; flex-shrink: 0; }
+  .ligne-statut .barre-statut-fond { flex: 1; background: var(--gris-fond); border-radius: 3px; height: 18px; position: relative; overflow: hidden; }
+  .ligne-statut .barre-statut-remplissage { height: 100%; border-radius: 3px; }
+  .ligne-statut .valeurs-statut { width: 140px; font-size: 11px; color: #5a5a5a; text-align: right; flex-shrink: 0; }
+
+  #etat-vide { display: none; padding: 40px; text-align: center; color: #8a8a8a; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <div id="toolbar">
+    <div class="titre">Programmation pluriannuelle</div>
+    <div class="toggle-vote">
+      <button class="actif" data-mode="tous">Tous les projets</button>
+      <button data-mode="votes">Votés uniquement</button>
+    </div>
+  </div>
+
+  <div id="bandeau-stats">
+    <div class="stat-globale"><div class="valeur" id="stat-budget-total">–</div><div class="libelle">Budget du plan</div></div>
+    <div class="stat-globale"><div class="valeur" id="stat-budget-vote">–</div><div class="libelle">Budget voté</div></div>
+    <div class="stat-globale"><div class="valeur" id="stat-nb-projets">–</div><div class="libelle">Projets</div></div>
+    <div class="stat-globale"><div class="valeur" id="stat-ecart">–</div><div class="libelle">Écart moyen prévu/réel</div></div>
+  </div>
+
+  <div class="section">
+    <h3>Budget prévu / réel par année</h3>
+    <div class="legende">
+      <span><span class="puce" style="background:var(--bleu-clair)"></span>Budget prévu</span>
+      <span><span class="puce" style="background:var(--bleu-france)"></span>Dépense réelle</span>
+    </div>
+    <div id="histogramme"></div>
+  </div>
+
+  <div class="section">
+    <h3>Engagement budgétaire cumulé</h3>
+    <div id="zone-courbe"></div>
+  </div>
+
+  <div class="section">
+    <h3>Répartition par statut</h3>
+    <div id="repartition-statut"></div>
+  </div>
+
+  <div id="etat-vide">
+    Aucun projet à afficher. Vérifiez le mappage des colonnes dans la
+    configuration du widget, ou ajoutez des lignes avec au moins une Année
+    et un Budget global.
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  grist.ready({
+    requiredAccess: "read table",
+    columns: [
+      { name: "Nom", title: "Nom du projet" },
+      { name: "Annee", title: "Année de réalisation", type: "Numeric" },
+      { name: "Vote", title: "Voté", type: "Any" },
+      { name: "StatutGlobal", title: "Statut global", type: "Any" },
+      { name: "BudgetGlobal", title: "Budget global", type: "Numeric" },
+      { name: "DepenseReelle", title: "Dépense réelle (formule)", optional: true, type: "Numeric" }
+    ]
+  });
+
+  var projets = [];
+  var modeFiltre = "tous";
+
+  var STATUTS_ORDRE = ["envisagé", "à réaliser", "en cours", "livré", "suspendu"];
+  var LIBELLES_STATUT = { "envisagé": "Envisagé", "à réaliser": "À réaliser", "en cours": "En cours", "livré": "Livré", "suspendu": "Suspendu" };
+  var COULEURS_STATUT = {
+    "envisagé": "var(--gris-neutre)",
+    "à réaliser": "var(--bleu-clair)",
+    "en cours": "var(--bleu-france)",
+    "livré": "var(--vert-succes)",
+    "suspendu": "var(--orange-attente)"
+  };
+
+  document.querySelectorAll(".toggle-vote button").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      document.querySelectorAll(".toggle-vote button").forEach(function (b) { b.classList.remove("actif"); });
+      btn.classList.add("actif");
+      modeFiltre = btn.getAttribute("data-mode");
+      dessiner();
+    });
+  });
+
+  grist.onRecords(function (records, mappings) {
+    var lignes = grist.mapColumnNames(records, mappings) || records;
+    projets = lignes.map(normaliserProjet).filter(function (p) { return p && p.annee; });
+    dessiner();
+  });
+
+  function normaliserProjet(r) {
+    if (!r) return null;
+    return {
+      id: r.id,
+      nom: r.Nom || "(sans nom)",
+      annee: Number(r.Annee) || null,
+      vote: !!r.Vote,
+      statut: normaliserStatut(r.StatutGlobal),
+      budget: Number(r.BudgetGlobal) || 0,
+      depenseReelle: Number(r.DepenseReelle) || 0
+    };
+  }
+
+  function normaliserStatut(valeur) {
+    var s = (valeur || "").toString().toLowerCase().trim();
+    if (STATUTS_ORDRE.indexOf(s) !== -1) return s;
+    if (s.indexOf("réalis") !== -1 || s.indexOf("realis") !== -1) return "à réaliser";
+    if (s.indexOf("cours") !== -1) return "en cours";
+    if (s.indexOf("livr") !== -1) return "livré";
+    if (s.indexOf("suspend") !== -1) return "suspendu";
+    return "envisagé";
+  }
+
+  function formaterMontant(v) {
+    if (Math.abs(v) >= 1000000) return (v / 1000000).toLocaleString("fr-FR", { maximumFractionDigits: 1 }) + " M€";
+    return Math.round(v).toLocaleString("fr-FR") + " €";
+  }
+
+  function dessiner() {
+    var etatVide = document.getElementById("etat-vide");
+    var donnees = modeFiltre === "votes" ? projets.filter(function (p) { return p.vote; }) : projets;
+
+    if (!projets.length) {
+      etatVide.style.display = "block";
+      return;
+    }
+    etatVide.style.display = "none";
+
+    dessinerStats(donnees);
+    dessinerHistogramme(donnees);
+    dessinerCourbeCumulee(donnees);
+    dessinerRepartitionStatut(donnees);
+  }
+
+  function dessinerStats(donnees) {
+    var budgetTotal = projets.reduce(function (s, p) { return s + p.budget; }, 0);
+    var budgetVote = projets.filter(function (p) { return p.vote; }).reduce(function (s, p) { return s + p.budget; }, 0);
+
+    var avecReel = donnees.filter(function (p) { return p.depenseReelle > 0 && p.budget > 0; });
+    var ecartMoyen = avecReel.length
+      ? Math.round(avecReel.reduce(function (s, p) { return s + (p.depenseReelle - p.budget) / p.budget * 100; }, 0) / avecReel.length)
+      : null;
+
+    document.getElementById("stat-budget-total").textContent = formaterMontant(budgetTotal);
+    document.getElementById("stat-budget-vote").textContent = formaterMontant(budgetVote);
+    document.getElementById("stat-nb-projets").textContent = donnees.length;
+    document.getElementById("stat-ecart").textContent = ecartMoyen === null ? "–" : (ecartMoyen > 0 ? "+" : "") + ecartMoyen + " %";
+  }
+
+  function grouperParAnnee(donnees) {
+    var annees = Array.from(new Set(donnees.map(function (p) { return p.annee; }))).sort(function (a, b) { return a - b; });
+    return annees.map(function (annee) {
+      var projetsAnnee = donnees.filter(function (p) { return p.annee === annee; });
+      return {
+        annee: annee,
+        nb: projetsAnnee.length,
+        budgetTotal: projetsAnnee.reduce(function (s, p) { return s + p.budget; }, 0),
+        reelTotal: projetsAnnee.reduce(function (s, p) { return s + p.depenseReelle; }, 0)
+      };
+    });
+  }
+
+  function dessinerHistogramme(donnees) {
+    var conteneur = document.getElementById("histogramme");
+    conteneur.innerHTML = "";
+    var groupes = grouperParAnnee(donnees);
+    if (!groupes.length) return;
+
+    var maxValeur = Math.max.apply(null, groupes.map(function (g) { return Math.max(g.budgetTotal, g.reelTotal); }).concat(1));
+
+    groupes.forEach(function (g) {
+      var bloc = document.createElement("div");
+      bloc.className = "groupe-annee";
+
+      var barres = document.createElement("div");
+      barres.className = "barres-annee";
+
+      var barrePrevu = document.createElement("div");
+      barrePrevu.className = "barre prevu";
+      barrePrevu.style.height = Math.max(2, (g.budgetTotal / maxValeur) * 100) + "%";
+      barrePrevu.innerHTML = '<span class="valeur-barre"></span>';
+      barrePrevu.querySelector(".valeur-barre").textContent = g.budgetTotal ? formaterMontant(g.budgetTotal) : "";
+      barres.appendChild(barrePrevu);
+
+      var barreReel = document.createElement("div");
+      barreReel.className = "barre reel";
+      barreReel.style.height = Math.max(2, (g.reelTotal / maxValeur) * 100) + "%";
+      barreReel.innerHTML = '<span class="valeur-barre"></span>';
+      barreReel.querySelector(".valeur-barre").textContent = g.reelTotal ? formaterMontant(g.reelTotal) : "";
+      barres.appendChild(barreReel);
+
+      bloc.appendChild(barres);
+
+      var libelleAnnee = document.createElement("div");
+      libelleAnnee.className = "libelle-annee";
+      libelleAnnee.textContent = g.annee;
+      bloc.appendChild(libelleAnnee);
+
+      var nbProjets = document.createElement("div");
+      nbProjets.className = "nb-projets-annee";
+      nbProjets.textContent = g.nb + " projet" + (g.nb > 1 ? "s" : "");
+      bloc.appendChild(nbProjets);
+
+      conteneur.appendChild(bloc);
+    });
+  }
+
+  function dessinerCourbeCumulee(donnees) {
+    var conteneur = document.getElementById("zone-courbe");
+    conteneur.innerHTML = "";
+    var groupes = grouperParAnnee(donnees);
+    if (!groupes.length) return;
+
+    var largeur = conteneur.clientWidth || 600;
+    var hauteur = 200;
+    var marge = { haut: 20, bas: 30, gauche: 55, droite: 20 };
+    var largeurUtile = largeur - marge.gauche - marge.droite;
+    var hauteurUtile = hauteur - marge.haut - marge.bas;
+
+    var cumulPrevu = 0, cumulReel = 0;
+    var points = groupes.map(function (g) {
+      cumulPrevu += g.budgetTotal;
+      cumulReel += g.reelTotal;
+      return { annee: g.annee, cumulPrevu: cumulPrevu, cumulReel: cumulReel };
+    });
+
+    var maxCumul = Math.max.apply(null, points.map(function (p) { return Math.max(p.cumulPrevu, p.cumulReel); }).concat(1));
+
+    function x(i) { return marge.gauche + (points.length > 1 ? (i / (points.length - 1)) * largeurUtile : largeurUtile / 2); }
+    function y(v) { return marge.haut + hauteurUtile - (v / maxCumul) * hauteurUtile; }
+
+    var pathPrevu = points.map(function (p, i) { return (i === 0 ? "M" : "L") + x(i) + "," + y(p.cumulPrevu); }).join(" ");
+    var pathReel = points.map(function (p, i) { return (i === 0 ? "M" : "L") + x(i) + "," + y(p.cumulReel); }).join(" ");
+
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 " + largeur + " " + hauteur);
+    svg.setAttribute("width", "100%");
+    svg.setAttribute("height", hauteur);
+
+    // Lignes de grille horizontales + graduations
+    [0, 0.25, 0.5, 0.75, 1].forEach(function (frac) {
+      var yy = marge.haut + hauteurUtile * (1 - frac);
+      var ligne = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      ligne.setAttribute("x1", marge.gauche); ligne.setAttribute("x2", largeur - marge.droite);
+      ligne.setAttribute("y1", yy); ligne.setAttribute("y2", yy);
+      ligne.setAttribute("stroke", "#f0f0fd"); ligne.setAttribute("stroke-width", "1");
+      svg.appendChild(ligne);
+
+      var texte = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      texte.setAttribute("x", marge.gauche - 8); texte.setAttribute("y", yy + 4);
+      texte.setAttribute("font-size", "10"); texte.setAttribute("fill", "#8a8a8a");
+      texte.setAttribute("text-anchor", "end");
+      texte.textContent = formaterMontant(maxCumul * frac);
+      svg.appendChild(texte);
+    });
+
+    // Axe des années
+    points.forEach(function (p, i) {
+      var texte = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      texte.setAttribute("x", x(i)); texte.setAttribute("y", hauteur - 8);
+      texte.setAttribute("font-size", "11"); texte.setAttribute("fill", "var(--gris-texte)");
+      texte.setAttribute("text-anchor", "middle"); texte.setAttribute("font-weight", "700");
+      texte.textContent = p.annee;
+      svg.appendChild(texte);
+    });
+
+    function ajouterCourbe(chemin, couleur) {
+      var el = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      el.setAttribute("d", chemin);
+      el.setAttribute("fill", "none");
+      el.setAttribute("stroke", couleur);
+      el.setAttribute("stroke-width", "2.5");
+      svg.appendChild(el);
+    }
+    ajouterCourbe(pathPrevu, "var(--bleu-clair)");
+    ajouterCourbe(pathReel, "var(--bleu-france)");
+
+    points.forEach(function (p, i) {
+      [{ v: p.cumulPrevu, c: "var(--bleu-clair)" }, { v: p.cumulReel, c: "var(--bleu-france)" }].forEach(function (pt) {
+        var cercle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        cercle.setAttribute("cx", x(i)); cercle.setAttribute("cy", y(pt.v)); cercle.setAttribute("r", 3.5);
+        cercle.setAttribute("fill", pt.c);
+        svg.appendChild(cercle);
+      });
+    });
+
+    conteneur.appendChild(svg);
+  }
+
+  function dessinerRepartitionStatut(donnees) {
+    var conteneur = document.getElementById("repartition-statut");
+    conteneur.innerHTML = "";
+
+    var budgetTotal = donnees.reduce(function (s, p) { return s + p.budget; }, 0) || 1;
+
+    STATUTS_ORDRE.forEach(function (statut) {
+      var projetsStatut = donnees.filter(function (p) { return p.statut === statut; });
+      if (!projetsStatut.length) return;
+      var budgetStatut = projetsStatut.reduce(function (s, p) { return s + p.budget; }, 0);
+      var pct = Math.round((budgetStatut / budgetTotal) * 100);
+
+      var ligne = document.createElement("div");
+      ligne.className = "ligne-statut";
+      ligne.innerHTML =
+        '<div class="libelle-statut"></div>' +
+        '<div class="barre-statut-fond"><div class="barre-statut-remplissage"></div></div>' +
+        '<div class="valeurs-statut"></div>';
+      ligne.querySelector(".libelle-statut").textContent = LIBELLES_STATUT[statut];
+      var remplissage = ligne.querySelector(".barre-statut-remplissage");
+      remplissage.style.width = pct + "%";
+      remplissage.style.background = COULEURS_STATUT[statut];
+      ligne.querySelector(".valeurs-statut").textContent =
+        projetsStatut.length + " projet" + (projetsStatut.length > 1 ? "s" : "") + " · " + formaterMontant(budgetStatut) + " (" + pct + " %)";
+      conteneur.appendChild(ligne);
+    });
+  }
+
+})();
+</script>
+
+</body>
+</html>
