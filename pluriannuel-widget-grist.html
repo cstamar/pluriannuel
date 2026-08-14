@@ -161,14 +161,24 @@
   #zone-impression table { width: 100%; border-collapse: collapse; font-size: 12px; }
   #zone-impression td, #zone-impression th { padding: 4px 8px; border-bottom: 1px solid #ddd; text-align: left; }
   #zone-impression .puce-cat-impression { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
-  #zone-impression .ligne-sous-total td { font-weight: 700; border-top: 1.5px solid #333; border-bottom: none; }
-  #zone-impression .ligne-total-general td { font-weight: 700; font-size: 13px; border-top: 2px solid #000; }
+  #zone-impression .ligne-entete-categorie td { color: #fff; font-weight: 700; font-size: 13px; padding: 6px 8px; }
+  #zone-impression .ligne-entete-sous-categorie td { font-weight: 700; background: #f0f0f0; font-style: italic; padding-top: 6px; }
+  #zone-impression .ligne-entete-annee td { color: #666; font-size: 11px; padding-top: 6px; border-bottom: 1px solid #eee; }
+  #zone-impression .ligne-sous-total-annee td { font-weight: 700; border-top: 1px solid #999; }
+  #zone-impression .ligne-total-sous-categorie td { font-weight: 700; border-top: 1.5px solid #333; background: #fafafa; }
+  #zone-impression .ligne-total-categorie td { font-weight: 700; font-size: 13px; border-top: 2px solid #000; border-bottom: 2px solid #000; }
+  #zone-impression .ligne-total-general td { font-weight: 700; font-size: 14px; border-top: 3px double #000; padding-top: 8px; }
   #zone-impression .legende-impression { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; margin-bottom: 18px; }
  
   @media print {
     body * { visibility: hidden; }
     #zone-impression, #zone-impression * { visibility: visible; }
     #zone-impression { display: block; position: absolute; top: 0; left: 0; width: 100%; }
+    #zone-impression * {
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+      color-adjust: exact !important;
+    }
   }
 </style>
 </head>
@@ -263,7 +273,8 @@
       { name: "BudgetGlobal", title: "Budget global", type: "Numeric" },
       { name: "DepenseReelle", title: "Dépense réelle (formule)", optional: true, type: "Numeric" },
       { name: "Categorie", title: "Catégorie (formule CategorieProjet)", optional: true, type: "Any" },
-      { name: "Adresse", title: "Adresse / périmètre", optional: true, type: "Any" }
+      { name: "Adresse", title: "Adresse / périmètre", optional: true, type: "Any" },
+      { name: "SousCategorie", title: "Sous-catégorie (formule ClassificationProjetDetail ou dédiée)", optional: true, type: "Any" }
     ]
   });
  
@@ -326,6 +337,7 @@
       budget: Number(r.BudgetGlobal) || 0,
       depenseReelle: Number(r.DepenseReelle) || 0,
       categorie: (r.Categorie || "").toString(),
+      sousCategorie: (r.SousCategorie || "Non précisé").toString(),
       adresse: (r.Adresse || "").toString()
     };
   }
@@ -619,74 +631,105 @@
  
     var legende = document.getElementById("impression-legende");
     legende.innerHTML = "";
-    (toutesCategoriesPresentes ? [] : categoriesRetenues).forEach(function (cat) {
+    (toutesCategoriesPresentes ? Array.from(new Set(donneesRetenues.map(function (p) { return p.categorie; }))) : categoriesRetenues).forEach(function (cat) {
       var span = document.createElement("span");
-      span.innerHTML = '<span class="puce-cat-impression" style="background:' + couleursCategories[cat] + '"></span>';
-      span.appendChild(document.createTextNode(cat));
+      span.innerHTML = '<span class="puce-cat-impression" style="background:' + (couleursCategories[cat] || "#9a9a9a") + '"></span>';
+      span.appendChild(document.createTextNode(cat || "Non catégorisé"));
       legende.appendChild(span);
     });
  
     var corps = document.getElementById("impression-corps");
     corps.innerHTML = "";
  
-    var groupesAnnee = {};
-    anneesRetenues.slice().sort(function (a, b) { return a - b; }).forEach(function (annee) {
-      groupesAnnee[annee] = donneesRetenues.filter(function (p) { return p.annee === annee; });
-    });
+    var table = document.createElement("table");
+    table.innerHTML = "<thead><tr><th>Catégorie</th><th>Adresse</th><th>Projet</th><th>Budget</th></tr></thead>";
+    var tbody = document.createElement("tbody");
+    table.appendChild(tbody);
+    corps.appendChild(table);
  
     var totalGeneral = 0;
+    var groupesCategorie = grouperPar(donneesRetenues, function (p) { return p.categorie || "Non catégorisé"; });
  
-    Object.keys(groupesAnnee).sort(function (a, b) { return a - b; }).forEach(function (annee) {
-      var lignesAnnee = groupesAnnee[annee];
-      if (!lignesAnnee.length) return;
+    Object.keys(groupesCategorie).sort().forEach(function (nomCategorie) {
+      var couleurCat = couleursCategories[nomCategorie] || "#9a9a9a";
+      ajouterLigne(tbody, "ligne-entete-categorie", [{ texte: nomCategorie, colspan: 4 }], couleurCat);
  
-      var blocAnnee = document.createElement("div");
-      blocAnnee.className = "bloc-annee";
+      var totalCategorie = 0;
+      var groupesSousCategorie = grouperPar(groupesCategorie[nomCategorie], function (p) { return p.sousCategorie; });
  
-      var titreAnnee = document.createElement("div");
-      titreAnnee.className = "titre-annee-impression";
-      titreAnnee.textContent = "Année " + annee;
-      blocAnnee.appendChild(titreAnnee);
+      Object.keys(groupesSousCategorie).sort().forEach(function (nomSousCategorie) {
+        ajouterLigne(tbody, "ligne-entete-sous-categorie", [{ texte: "↳ " + nomSousCategorie, colspan: 4 }]);
  
-      var table = document.createElement("table");
-      table.innerHTML = "<thead><tr><th>Projet</th><th>Adresse</th><th>Catégorie</th><th>Budget</th></tr></thead>";
-      var tbody = document.createElement("tbody");
+        var totalSousCategorie = 0;
+        var groupesAnnee = grouperPar(groupesSousCategorie[nomSousCategorie], function (p) { return p.annee; });
  
-      var sousTotal = 0;
-      lignesAnnee
-        .slice()
-        .sort(function (a, b) { return String(a.categorie).localeCompare(String(b.categorie)); })
-        .forEach(function (p) {
-          sousTotal += p.budget;
-          var couleur = couleursCategories[p.categorie] || "#9a9a9a";
-          var tr = document.createElement("tr");
-          tr.innerHTML =
-            "<td>" + escapeHtmlEtat(p.nom) + "</td>" +
-            "<td>" + escapeHtmlEtat(p.adresse || "—") + "</td>" +
-            '<td><span class="puce-cat-impression" style="background:' + couleur + '"></span>' + escapeHtmlEtat(p.categorie || "—") + "</td>" +
-            "<td>" + formaterMontant(p.budget) + "</td>";
-          tbody.appendChild(tr);
+        Object.keys(groupesAnnee).sort(function (a, b) { return a - b; }).forEach(function (annee) {
+          ajouterLigne(tbody, "ligne-entete-annee", [{ texte: "Année " + annee, colspan: 4 }]);
+ 
+          var sousTotalAnnee = 0;
+          groupesAnnee[annee]
+            .slice()
+            .sort(function (a, b) { return a.nom.localeCompare(b.nom); })
+            .forEach(function (p) {
+              sousTotalAnnee += p.budget;
+              var tr = document.createElement("tr");
+              tr.innerHTML =
+                '<td><span class="puce-cat-impression" style="background:' + couleurCat + '"></span>' + escapeHtmlEtat(nomCategorie) + "</td>" +
+                "<td>" + escapeHtmlEtat(p.adresse || "—") + "</td>" +
+                "<td>" + escapeHtmlEtat(p.nom) + "</td>" +
+                "<td>" + formaterMontant(p.budget) + "</td>";
+              tbody.appendChild(tr);
+            });
+ 
+          ajouterLigne(tbody, "ligne-sous-total-annee", [
+            { texte: "Sous-total année " + annee, colspan: 3 },
+            { texte: formaterMontant(sousTotalAnnee) }
+          ]);
+          totalSousCategorie += sousTotalAnnee;
         });
  
-      var trSousTotal = document.createElement("tr");
-      trSousTotal.className = "ligne-sous-total";
-      trSousTotal.innerHTML = '<td colspan="3">Sous-total ' + annee + "</td><td>" + formaterMontant(sousTotal) + "</td>";
-      tbody.appendChild(trSousTotal);
+        ajouterLigne(tbody, "ligne-total-sous-categorie", [
+          { texte: "TOTAL " + nomSousCategorie, colspan: 3 },
+          { texte: formaterMontant(totalSousCategorie) }
+        ]);
+        totalCategorie += totalSousCategorie;
+      });
  
-      totalGeneral += sousTotal;
- 
-      table.appendChild(tbody);
-      blocAnnee.appendChild(table);
-      corps.appendChild(blocAnnee);
+      ajouterLigne(tbody, "ligne-total-categorie", [
+        { texte: "TOTAL CATÉGORIE — " + nomCategorie, colspan: 3 },
+        { texte: formaterMontant(totalCategorie) }
+      ], couleurCat, true);
+      totalGeneral += totalCategorie;
     });
  
-    var tableTotal = document.createElement("table");
-    tableTotal.innerHTML =
-      '<tbody><tr class="ligne-total-general"><td colspan="3">TOTAL GÉNÉRAL</td><td>' + formaterMontant(totalGeneral) + "</td></tr></tbody>";
-    corps.appendChild(tableTotal);
+    ajouterLigne(tbody, "ligne-total-general", [
+      { texte: "TOTAL GÉNÉRAL", colspan: 3 },
+      { texte: formaterMontant(totalGeneral) }
+    ]);
  
     fondModalEtat.classList.remove("visible");
     window.print();
+  }
+ 
+  function grouperPar(liste, fn) {
+    var groupes = {};
+    liste.forEach(function (item) {
+      var cle = fn(item);
+      if (!groupes[cle]) groupes[cle] = [];
+      groupes[cle].push(item);
+    });
+    return groupes;
+  }
+ 
+  function ajouterLigne(tbody, classe, cellules, couleurFond, bordureSeulement) {
+    var tr = document.createElement("tr");
+    tr.className = classe;
+    if (couleurFond && !bordureSeulement) tr.style.background = couleurFond;
+    if (couleurFond && bordureSeulement) tr.style.borderLeft = "6px solid " + couleurFond;
+    tr.innerHTML = cellules.map(function (c) {
+      return '<td' + (c.colspan ? ' colspan="' + c.colspan + '"' : "") + ">" + escapeHtmlEtat(c.texte) + "</td>";
+    }).join("");
+    tbody.appendChild(tr);
   }
  
 })();
