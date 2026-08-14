@@ -121,6 +121,55 @@
   .ligne-statut .valeurs-statut { width: 140px; font-size: 11px; color: #5a5a5a; text-align: right; flex-shrink: 0; }
  
   #etat-vide { display: none; padding: 40px; text-align: center; color: #8a8a8a; font-size: 13px; }
+ 
+  /* --- Modale de configuration de l'état PDF --- */
+  #fond-modal-etat {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,20,0.45);
+    z-index: 20; align-items: center; justify-content: center;
+  }
+  #fond-modal-etat.visible { display: flex; }
+  #contenu-modal-etat {
+    background: var(--blanc); width: min(520px, 92vw); max-height: 85vh; overflow-y: auto;
+    border-top: 4px solid var(--bleu-france); box-shadow: 0 8px 24px rgba(0,0,0,0.25); border-radius: 2px; padding: 18px 20px;
+  }
+  #contenu-modal-etat h2 { margin: 0 0 16px 0; font-size: 16px; color: var(--bleu-france); }
+  #contenu-modal-etat h3 { font-size: 12px; text-transform: uppercase; color: var(--bleu-france); margin: 18px 0 8px 0; }
+  #contenu-modal-etat label { font-size: 12px; color: #5a5a5a; }
+  #champ-titre-etat { width: 100%; padding: 7px 9px; border: 1px solid var(--gris-bordure); border-radius: 3px; font-size: 14px; margin-top: 4px; }
+ 
+  .ligne-choix-categorie, .ligne-choix-annee {
+    display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 13px;
+  }
+  .ligne-choix-categorie input[type="color"] { width: 28px; height: 22px; border: none; padding: 0; cursor: pointer; }
+  .ligne-choix-categorie span, .ligne-choix-annee span { flex: 1; }
+ 
+  #ligne-boutons-etat { display: flex; gap: 10px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--gris-bordure); }
+  #ligne-boutons-etat button {
+    border: 1px solid var(--bleu-france); background: var(--blanc); color: var(--bleu-france);
+    padding: 8px 16px; border-radius: 3px; font-size: 13px; cursor: pointer;
+  }
+  #bouton-generer-etat { background: var(--bleu-france); color: var(--blanc); }
+ 
+  /* --- Zone imprimable : cachée à l'écran, visible seulement à l'impression --- */
+  #zone-impression { display: none; }
+  #zone-impression h1 { font-size: 20px; color: #000; margin-bottom: 4px; }
+  #zone-impression .sous-titre-impression { font-size: 12px; color: #555; margin-bottom: 18px; }
+  #zone-impression .bloc-annee { margin-bottom: 22px; page-break-inside: avoid; }
+  #zone-impression .titre-annee-impression {
+    font-size: 14px; font-weight: 700; background: #eee; padding: 4px 8px; margin-bottom: 6px;
+  }
+  #zone-impression table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #zone-impression td, #zone-impression th { padding: 4px 8px; border-bottom: 1px solid #ddd; text-align: left; }
+  #zone-impression .puce-cat-impression { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+  #zone-impression .ligne-sous-total td { font-weight: 700; border-top: 1.5px solid #333; border-bottom: none; }
+  #zone-impression .ligne-total-general td { font-weight: 700; font-size: 13px; border-top: 2px solid #000; }
+  #zone-impression .legende-impression { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; margin-bottom: 18px; }
+ 
+  @media print {
+    body * { visibility: hidden; }
+    #zone-impression, #zone-impression * { visibility: visible; }
+    #zone-impression { display: block; position: absolute; top: 0; left: 0; width: 100%; }
+  }
 </style>
 </head>
 <body>
@@ -136,6 +185,7 @@
       <select id="filtre-categorie" style="border:1px solid var(--gris-bordure); border-radius:2px; padding:4px 8px; font-size:12px;">
         <option value="tous">Toutes catégories</option>
       </select>
+      <button id="bouton-ouvrir-etat" style="border:1px solid var(--bleu-france); background:var(--blanc); color:var(--bleu-france); padding:4px 12px; border-radius:12px; font-size:12px; cursor:pointer;">📄 État PDF</button>
     </div>
   </div>
  
@@ -172,6 +222,33 @@
   </div>
 </div>
  
+<div id="fond-modal-etat">
+  <div id="contenu-modal-etat">
+    <h2>Configuration de l'état PDF</h2>
+ 
+    <label for="champ-titre-etat">Titre du document</label>
+    <input type="text" id="champ-titre-etat" value="PROGRAMME GER" />
+ 
+    <h3>Catégories à inclure</h3>
+    <div id="liste-choix-categories"></div>
+ 
+    <h3>Années à inclure</h3>
+    <div id="liste-choix-annees"></div>
+ 
+    <div id="ligne-boutons-etat">
+      <button id="bouton-generer-etat">Générer et imprimer</button>
+      <button id="bouton-annuler-etat">Annuler</button>
+    </div>
+  </div>
+</div>
+ 
+<div id="zone-impression">
+  <h1 id="impression-titre"></h1>
+  <div class="sous-titre-impression" id="impression-date"></div>
+  <div class="legende-impression" id="impression-legende"></div>
+  <div id="impression-corps"></div>
+</div>
+ 
 <script>
 (function () {
   "use strict";
@@ -185,7 +262,8 @@
       { name: "StatutGlobal", title: "Statut global", type: "Any" },
       { name: "BudgetGlobal", title: "Budget global", type: "Numeric" },
       { name: "DepenseReelle", title: "Dépense réelle (formule)", optional: true, type: "Numeric" },
-      { name: "Categorie", title: "Catégorie (formule CategorieProjet)", optional: true, type: "Any" }
+      { name: "Categorie", title: "Catégorie (formule CategorieProjet)", optional: true, type: "Any" },
+      { name: "Adresse", title: "Adresse / périmètre", optional: true, type: "Any" }
     ]
   });
  
@@ -247,7 +325,8 @@
       statut: normaliserStatut(r.StatutGlobal),
       budget: Number(r.BudgetGlobal) || 0,
       depenseReelle: Number(r.DepenseReelle) || 0,
-      categorie: (r.Categorie || "").toString()
+      categorie: (r.Categorie || "").toString(),
+      adresse: (r.Adresse || "").toString()
     };
   }
  
@@ -464,6 +543,150 @@
         projetsStatut.length + " projet" + (projetsStatut.length > 1 ? "s" : "") + " · " + formaterMontant(budgetStatut) + " (" + pct + " %)";
       conteneur.appendChild(ligne);
     });
+  }
+ 
+  // ==== État PDF (imprimable) =========================================
+ 
+  var PALETTE_CATEGORIES = ["#000091", "#6a6af4", "#18753c", "#b34000", "#e1000f", "#6e445a", "#00a95f", "#8d533e", "#417dc4"];
+  var couleursCategories = {}; // { nomCategorie: "#rrggbb" }
+ 
+  var fondModalEtat = document.getElementById("fond-modal-etat");
+  document.getElementById("bouton-ouvrir-etat").addEventListener("click", ouvrirModaleEtat);
+  document.getElementById("bouton-annuler-etat").addEventListener("click", function () {
+    fondModalEtat.classList.remove("visible");
+  });
+  fondModalEtat.addEventListener("click", function (e) { if (e.target === fondModalEtat) fondModalEtat.classList.remove("visible"); });
+  document.getElementById("bouton-generer-etat").addEventListener("click", genererEtImprimer);
+ 
+  function ouvrirModaleEtat() {
+    var categories = Array.from(new Set(projets.map(function (p) { return p.categorie; }).filter(Boolean))).sort();
+    var annees = Array.from(new Set(projets.map(function (p) { return p.annee; }))).sort(function (a, b) { return a - b; });
+ 
+    var listeCategories = document.getElementById("liste-choix-categories");
+    listeCategories.innerHTML = "";
+    if (!categories.length) {
+      listeCategories.innerHTML = '<div style="font-size:12px; color:#8a8a8a;">Aucune catégorie renseignée — tous les projets seront inclus sans distinction de couleur.</div>';
+    }
+    categories.forEach(function (cat, i) {
+      if (!couleursCategories[cat]) couleursCategories[cat] = PALETTE_CATEGORIES[i % PALETTE_CATEGORIES.length];
+      var ligne = document.createElement("div");
+      ligne.className = "ligne-choix-categorie";
+      ligne.innerHTML =
+        '<input type="checkbox" class="case-categorie" checked value="' + escapeAttr(cat) + '" />' +
+        '<span></span>' +
+        '<input type="color" class="couleur-categorie" data-categorie="' + escapeAttr(cat) + '" value="' + couleursCategories[cat] + '" />';
+      ligne.querySelector("span").textContent = cat;
+      listeCategories.appendChild(ligne);
+    });
+ 
+    var listeAnnees = document.getElementById("liste-choix-annees");
+    listeAnnees.innerHTML = "";
+    annees.forEach(function (annee) {
+      var ligne = document.createElement("div");
+      ligne.className = "ligne-choix-annee";
+      ligne.innerHTML = '<input type="checkbox" class="case-annee" checked value="' + annee + '" /><span></span>';
+      ligne.querySelector("span").textContent = annee;
+      listeAnnees.appendChild(ligne);
+    });
+ 
+    fondModalEtat.classList.add("visible");
+  }
+ 
+  function escapeAttr(s) { return String(s).replace(/"/g, "&quot;"); }
+  function escapeHtmlEtat(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+ 
+  function genererEtImprimer() {
+    var titre = document.getElementById("champ-titre-etat").value || "PROGRAMME GER";
+ 
+    var categoriesRetenues = Array.from(document.querySelectorAll(".case-categorie:checked")).map(function (c) { return c.value; });
+    var toutesCategoriesPresentes = document.querySelectorAll(".case-categorie").length === 0;
+    document.querySelectorAll(".couleur-categorie").forEach(function (input) {
+      couleursCategories[input.getAttribute("data-categorie")] = input.value;
+    });
+ 
+    var anneesRetenues = Array.from(document.querySelectorAll(".case-annee:checked")).map(function (c) { return Number(c.value); });
+ 
+    var donneesRetenues = projets.filter(function (p) {
+      var okCategorie = toutesCategoriesPresentes || categoriesRetenues.indexOf(p.categorie) !== -1;
+      var okAnnee = anneesRetenues.indexOf(p.annee) !== -1;
+      return okCategorie && okAnnee;
+    });
+ 
+    document.getElementById("impression-titre").textContent = titre;
+    document.getElementById("impression-date").textContent = "Généré le " + new Date().toLocaleDateString("fr-FR", { day: "2-digit", month: "long", year: "numeric" });
+ 
+    var legende = document.getElementById("impression-legende");
+    legende.innerHTML = "";
+    (toutesCategoriesPresentes ? [] : categoriesRetenues).forEach(function (cat) {
+      var span = document.createElement("span");
+      span.innerHTML = '<span class="puce-cat-impression" style="background:' + couleursCategories[cat] + '"></span>';
+      span.appendChild(document.createTextNode(cat));
+      legende.appendChild(span);
+    });
+ 
+    var corps = document.getElementById("impression-corps");
+    corps.innerHTML = "";
+ 
+    var groupesAnnee = {};
+    anneesRetenues.slice().sort(function (a, b) { return a - b; }).forEach(function (annee) {
+      groupesAnnee[annee] = donneesRetenues.filter(function (p) { return p.annee === annee; });
+    });
+ 
+    var totalGeneral = 0;
+ 
+    Object.keys(groupesAnnee).sort(function (a, b) { return a - b; }).forEach(function (annee) {
+      var lignesAnnee = groupesAnnee[annee];
+      if (!lignesAnnee.length) return;
+ 
+      var blocAnnee = document.createElement("div");
+      blocAnnee.className = "bloc-annee";
+ 
+      var titreAnnee = document.createElement("div");
+      titreAnnee.className = "titre-annee-impression";
+      titreAnnee.textContent = "Année " + annee;
+      blocAnnee.appendChild(titreAnnee);
+ 
+      var table = document.createElement("table");
+      table.innerHTML = "<thead><tr><th>Projet</th><th>Adresse</th><th>Catégorie</th><th>Budget</th></tr></thead>";
+      var tbody = document.createElement("tbody");
+ 
+      var sousTotal = 0;
+      lignesAnnee
+        .slice()
+        .sort(function (a, b) { return String(a.categorie).localeCompare(String(b.categorie)); })
+        .forEach(function (p) {
+          sousTotal += p.budget;
+          var couleur = couleursCategories[p.categorie] || "#9a9a9a";
+          var tr = document.createElement("tr");
+          tr.innerHTML =
+            "<td>" + escapeHtmlEtat(p.nom) + "</td>" +
+            "<td>" + escapeHtmlEtat(p.adresse || "—") + "</td>" +
+            '<td><span class="puce-cat-impression" style="background:' + couleur + '"></span>' + escapeHtmlEtat(p.categorie || "—") + "</td>" +
+            "<td>" + formaterMontant(p.budget) + "</td>";
+          tbody.appendChild(tr);
+        });
+ 
+      var trSousTotal = document.createElement("tr");
+      trSousTotal.className = "ligne-sous-total";
+      trSousTotal.innerHTML = '<td colspan="3">Sous-total ' + annee + "</td><td>" + formaterMontant(sousTotal) + "</td>";
+      tbody.appendChild(trSousTotal);
+ 
+      totalGeneral += sousTotal;
+ 
+      table.appendChild(tbody);
+      blocAnnee.appendChild(table);
+      corps.appendChild(blocAnnee);
+    });
+ 
+    var tableTotal = document.createElement("table");
+    tableTotal.innerHTML =
+      '<tbody><tr class="ligne-total-general"><td colspan="3">TOTAL GÉNÉRAL</td><td>' + formaterMontant(totalGeneral) + "</td></tr></tbody>";
+    corps.appendChild(tableTotal);
+ 
+    fondModalEtat.classList.remove("visible");
+    window.print();
   }
  
 })();
