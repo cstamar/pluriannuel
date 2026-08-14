@@ -641,71 +641,88 @@
     var corps = document.getElementById("impression-corps");
     corps.innerHTML = "";
  
+    var anneesColonnes = anneesRetenues.slice().sort(function (a, b) { return a - b; });
+    var nbColonnesTotal = 2 + anneesColonnes.length + 1; // Adresse + Projet + une par année + Total
+ 
     var table = document.createElement("table");
-    table.innerHTML = "<thead><tr><th>Catégorie</th><th>Adresse</th><th>Projet</th><th>Budget</th></tr></thead>";
+    var enteteHtml = "<tr><th>Adresse</th><th>Projet</th>" +
+      anneesColonnes.map(function (a) { return "<th>" + a + "</th>"; }).join("") +
+      "<th>Total</th></tr>";
+    table.innerHTML = "<thead>" + enteteHtml + "</thead>";
     var tbody = document.createElement("tbody");
     table.appendChild(tbody);
     corps.appendChild(table);
  
-    var totalGeneral = 0;
+    function sommesParAnnee(liste) {
+      var sommes = {};
+      anneesColonnes.forEach(function (a) { sommes[a] = 0; });
+      liste.forEach(function (p) { sommes[p.annee] = (sommes[p.annee] || 0) + p.budget; });
+      return sommes;
+    }
+    function celluleAnnees(sommes) {
+      return anneesColonnes.map(function (a) {
+        return "<td>" + (sommes[a] ? formaterMontant(sommes[a]) : "—") + "</td>";
+      }).join("");
+    }
+    function totalLigne(sommes) {
+      return anneesColonnes.reduce(function (s, a) { return s + (sommes[a] || 0); }, 0);
+    }
+ 
+    var totalGeneralParAnnee = {};
+    anneesColonnes.forEach(function (a) { totalGeneralParAnnee[a] = 0; });
+ 
     var groupesCategorie = grouperPar(donneesRetenues, function (p) { return p.categorie || "Non catégorisé"; });
  
     Object.keys(groupesCategorie).sort().forEach(function (nomCategorie) {
       var couleurCat = couleursCategories[nomCategorie] || "#9a9a9a";
-      ajouterLigne(tbody, "ligne-entete-categorie", [{ texte: nomCategorie, colspan: 4 }], couleurCat);
+      ajouterLigne(tbody, "ligne-entete-categorie", [{ texte: nomCategorie, colspan: nbColonnesTotal }], couleurCat);
  
-      var totalCategorie = 0;
+      var totalCategorieParAnnee = {};
+      anneesColonnes.forEach(function (a) { totalCategorieParAnnee[a] = 0; });
+ 
       var groupesSousCategorie = grouperPar(groupesCategorie[nomCategorie], function (p) { return p.sousCategorie; });
  
       Object.keys(groupesSousCategorie).sort().forEach(function (nomSousCategorie) {
-        ajouterLigne(tbody, "ligne-entete-sous-categorie", [{ texte: "↳ " + nomSousCategorie, colspan: 4 }]);
+        ajouterLigne(tbody, "ligne-entete-sous-categorie", [{ texte: "↳ " + nomSousCategorie, colspan: nbColonnesTotal }]);
  
-        var totalSousCategorie = 0;
-        var groupesAnnee = grouperPar(groupesSousCategorie[nomSousCategorie], function (p) { return p.annee; });
+        groupesSousCategorie[nomSousCategorie]
+          .slice()
+          .sort(function (a, b) { return a.nom.localeCompare(b.nom); })
+          .forEach(function (p) {
+            var tr = document.createElement("tr");
+            tr.innerHTML =
+              "<td>" + escapeHtmlEtat(p.adresse || "—") + "</td>" +
+              "<td>" + escapeHtmlEtat(p.nom) + "</td>" +
+              anneesColonnes.map(function (a) { return "<td>" + (a === p.annee ? formaterMontant(p.budget) : "—") + "</td>"; }).join("") +
+              "<td>" + formaterMontant(p.budget) + "</td>";
+            tbody.appendChild(tr);
+          });
  
-        Object.keys(groupesAnnee).sort(function (a, b) { return a - b; }).forEach(function (annee) {
-          ajouterLigne(tbody, "ligne-entete-annee", [{ texte: "Année " + annee, colspan: 4 }]);
+        var sommesSousCategorie = sommesParAnnee(groupesSousCategorie[nomSousCategorie]);
+        var trSousTotal = document.createElement("tr");
+        trSousTotal.className = "ligne-total-sous-categorie";
+        trSousTotal.innerHTML = "<td colspan=\"2\">TOTAL " + escapeHtmlEtat(nomSousCategorie) + "</td>" +
+          celluleAnnees(sommesSousCategorie) + "<td>" + formaterMontant(totalLigne(sommesSousCategorie)) + "</td>";
+        tbody.appendChild(trSousTotal);
  
-          var sousTotalAnnee = 0;
-          groupesAnnee[annee]
-            .slice()
-            .sort(function (a, b) { return a.nom.localeCompare(b.nom); })
-            .forEach(function (p) {
-              sousTotalAnnee += p.budget;
-              var tr = document.createElement("tr");
-              tr.innerHTML =
-                '<td><span class="puce-cat-impression" style="background:' + couleurCat + '"></span>' + escapeHtmlEtat(nomCategorie) + "</td>" +
-                "<td>" + escapeHtmlEtat(p.adresse || "—") + "</td>" +
-                "<td>" + escapeHtmlEtat(p.nom) + "</td>" +
-                "<td>" + formaterMontant(p.budget) + "</td>";
-              tbody.appendChild(tr);
-            });
- 
-          ajouterLigne(tbody, "ligne-sous-total-annee", [
-            { texte: "Sous-total année " + annee, colspan: 3 },
-            { texte: formaterMontant(sousTotalAnnee) }
-          ]);
-          totalSousCategorie += sousTotalAnnee;
-        });
- 
-        ajouterLigne(tbody, "ligne-total-sous-categorie", [
-          { texte: "TOTAL " + nomSousCategorie, colspan: 3 },
-          { texte: formaterMontant(totalSousCategorie) }
-        ]);
-        totalCategorie += totalSousCategorie;
+        anneesColonnes.forEach(function (a) { totalCategorieParAnnee[a] += sommesSousCategorie[a] || 0; });
       });
  
-      ajouterLigne(tbody, "ligne-total-categorie", [
-        { texte: "TOTAL CATÉGORIE — " + nomCategorie, colspan: 3 },
-        { texte: formaterMontant(totalCategorie) }
-      ], couleurCat, true);
-      totalGeneral += totalCategorie;
+      var trTotalCategorie = document.createElement("tr");
+      trTotalCategorie.className = "ligne-total-categorie";
+      trTotalCategorie.style.borderLeft = "6px solid " + couleurCat;
+      trTotalCategorie.innerHTML = "<td colspan=\"2\">TOTAL CATÉGORIE — " + escapeHtmlEtat(nomCategorie) + "</td>" +
+        celluleAnnees(totalCategorieParAnnee) + "<td>" + formaterMontant(totalLigne(totalCategorieParAnnee)) + "</td>";
+      tbody.appendChild(trTotalCategorie);
+ 
+      anneesColonnes.forEach(function (a) { totalGeneralParAnnee[a] += totalCategorieParAnnee[a] || 0; });
     });
  
-    ajouterLigne(tbody, "ligne-total-general", [
-      { texte: "TOTAL GÉNÉRAL", colspan: 3 },
-      { texte: formaterMontant(totalGeneral) }
-    ]);
+    var trTotalGeneral = document.createElement("tr");
+    trTotalGeneral.className = "ligne-total-general";
+    trTotalGeneral.innerHTML = "<td colspan=\"2\">TOTAL GÉNÉRAL</td>" +
+      celluleAnnees(totalGeneralParAnnee) + "<td>" + formaterMontant(totalLigne(totalGeneralParAnnee)) + "</td>";
+    tbody.appendChild(trTotalGeneral);
  
     fondModalEtat.classList.remove("visible");
     window.print();
@@ -721,11 +738,10 @@
     return groupes;
   }
  
-  function ajouterLigne(tbody, classe, cellules, couleurFond, bordureSeulement) {
+  function ajouterLigne(tbody, classe, cellules, couleurFond) {
     var tr = document.createElement("tr");
     tr.className = classe;
-    if (couleurFond && !bordureSeulement) tr.style.background = couleurFond;
-    if (couleurFond && bordureSeulement) tr.style.borderLeft = "6px solid " + couleurFond;
+    if (couleurFond) tr.style.background = couleurFond;
     tr.innerHTML = cellules.map(function (c) {
       return '<td' + (c.colspan ? ' colspan="' + c.colspan + '"' : "") + ">" + escapeHtmlEtat(c.texte) + "</td>";
     }).join("");
